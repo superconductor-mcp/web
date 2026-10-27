@@ -190,9 +190,15 @@ class HttpConnection extends HttpSockets
         $this->exchanges[(int) $this->listener->socket] = $this->listener;
     }
 
+    // the session id once the server gave one, and from 2025-06-18 the negotiated version on every request after initialize
     private function sessionHeaders(): array
     {
-        return is_null($this->session) ? [] : ['Mcp-Session-Id' => $this->session];
+        $version = $this->client->protocolVersion();
+
+        return [
+            ...(is_null($this->session) ? [] : ['Mcp-Session-Id' => $this->session]),
+            ...(! is_null($version) && $version >= '2025-06-18' ? ['MCP-Protocol-Version' => $version] : []),
+        ];
     }
 
     private function flush(Exchange $exchange): void

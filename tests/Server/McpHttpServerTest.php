@@ -8,11 +8,14 @@ use Fabricate\NutsAndBolts\ToolDefinition;
 use Fabricate\NutsAndBolts\ProgressReporter;
 use Fabricate\NutsAndBolts\Schema\TextProperty;
 use Fabricate\NutsAndBolts\Schema\StringProperty;
+use Fabricate\NutsAndBolts\Schema\ObjectSchema;
 use Fabricate\NutsAndBolts\Attributes\ToolCall;
 use Fabricate\NutsAndBolts\Messages\Tools\ToolListChangedNotification;
 use Voyager\Contracts\IOPools\Loop;
 use SuperconductorMCP\SSE\Server\McpHttpServer;
 use SuperconductorMCP\SSE\Client\HttpConnection;
+use Fabricate\Mechanism\Session\Elicitation;
+use Fabricate\NutsAndBolts\Messages\Elicitation\ElicitAnswer;
 
 #[ToolCall]
 final class EchoBack
@@ -42,7 +45,14 @@ final class BenchHttpServer extends MCPServer
 
     public function tools(): array
     {
-        return [new ToolDefinition('rev', 'Reverses text', ['text' => new StringProperty('text')], ['text'], EchoBack::class)];
+        return [
+            new ToolDefinition('rev', 'Reverses text', ['text' => new StringProperty('text')], ['text'], EchoBack::class),
+            new ToolDefinition('greet', action: function (): TextProperty {
+                $answer = app(Elicitation::class)->ask('Name?', new ObjectSchema(['name' => new StringProperty()], ['name']));
+
+                return new TextProperty($answer->accepted() ? "hello {$answer->content['name']}" : $answer->action->value);
+            }),
+        ];
     }
 }
 
@@ -132,14 +142,14 @@ it('serves our own http client end to end: handshake, JSON replies, an event-str
 
     $client->open();
     expect($client->ready()->wait())->toBe($client)
-        ->and($client->protocolVersion())->toBe('2025-03-26')
+        ->and($client->protocolVersion())->toBe('2025-06-18')
         ->and($client->serverInfo()['name'])->toBe('bench-http')
-        ->and(array_column($client->tools(), 'name'))->toBe(['rev']);
+        ->and(array_column($client->tools(), 'name'))->toBe(['rev', 'greet']);
 
     $client->ping()->wait();
 
     // tools/call runs in a fiber, so its reply comes down the POST as an event stream, progress first
-    expect($client->callTool('rev', ['text' => 'abc'])->wait()->content[0]['text'])->toBe('cba');
+    expect($client->callTool('rev', ['text' => 'abc'])->wait()->content[0]->value)->toBe('cba');
 
     // the list_changed the tool queued came down that same stream after the reply
     $seen = fn (): int => substr_count(json_encode(log_entries(), JSON_UNESCAPED_SLASHES), 'incoming notifications/tools/list_changed');
@@ -185,4 +195,58 @@ it('resumes a listening stream from Last-Event-ID and drops an idle session', fu
     // idle longer than web.session.idle: the session is gone
     $loop->until(function () use ($server): bool { return $server->sessionCount() === 0; });
     expect(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$session], '{"jsonrpc":"2.0","id":2,"method":"ping"}')[0])->toBe(404);
+});
+
+it('asks for no bearer when started without a token, and still refuses a foreign origin', function () {
+    $loop = testLoop();
+    $app = bareApp([], $loop);
+    $server = new McpHttpServer($loop, new ServerRepository($app));
+    $this->server = $server->start(new BenchHttpServer(), 0, null);
+    $init = json_encode(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => ['protocolVersion' => '2025-03-26', 'capabilities' => [], 'clientInfo' => ['name' => 'raw', 'version' => '1']]]);
+
+    expect(raw($server, $loop, 'POST', '/mcp', ['Content-Type' => 'application/json'], $init)[0])->toBe(200)
+        ->and(raw($server, $loop, 'POST', '/mcp', ['Content-Type' => 'application/json', 'Origin' => 'https://evil.example'], $init)[0])->toBe(403);
+
+    $server->stop();
+    expect(fn () => $server->start(new BenchHttpServer(), 0, ''))->toThrow(RuntimeException::class, 'pass null');
+});
+
+it('asks the user over the POST stream and takes the answer as its own POST', function () {
+    [$server, $loop, $token] = serve();
+    $this->server = $server;
+    $asked = [];
+    $client = (new MCPClient('bench', $loop))->onElicit(function ($request) use (&$asked): ElicitAnswer {
+        $asked[] = $request->message;
+
+        return ElicitAnswer::accept(['name' => 'Ada']);
+    });
+    $client->attach(new HttpConnection(['type' => 'http', 'url' => $server->url(), 'headers' => ['Authorization' => "Bearer {$token}"], 'fallback' => false], $loop, $client));
+
+    $client->open();
+    $client->ready()->wait();
+
+    expect($client->callTool('greet')->wait()->content[0]->value)->toBe('hello Ada')->and($asked)->toBe(['Name?']);
+});
+
+it('holds a 2025-06-18 session to its version header and refuses its batches; an older session keeps batches', function () {
+    [$server, $loop, $token] = serve();
+    $this->server = $server;
+    $auth = ['Authorization' => "Bearer {$token}", 'Content-Type' => 'application/json'];
+    $init = fn (string $version): string => json_encode(['jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => ['protocolVersion' => $version, 'capabilities' => (object) [], 'clientInfo' => ['name' => 'raw', 'version' => '1']]]);
+    $ping = '{"jsonrpc":"2.0","id":2,"method":"ping"}';
+
+    $new = ['Mcp-Session-Id' => raw($server, $loop, 'POST', '/mcp', $auth, $init('2025-06-18'))[1]['mcp-session-id']];
+    raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new, 'MCP-Protocol-Version' => '2025-06-18'], '{"jsonrpc":"2.0","method":"notifications/initialized"}');
+
+    expect(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new, 'MCP-Protocol-Version' => '2025-06-18'], $ping)[0])->toBe(200)
+        ->and(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new], '{"jsonrpc":"2.0","id":3,"method":"ping"}')[0])->toBe(200)
+        ->and(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new, 'MCP-Protocol-Version' => '2025-03-26'], '{"jsonrpc":"2.0","id":4,"method":"ping"}')[0])->toBe(400)
+        ->and(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new, 'MCP-Protocol-Version' => '1999-01-01'], '{"jsonrpc":"2.0","id":5,"method":"ping"}')[0])->toBe(400)
+        ->and(raw($server, $loop, 'POST', '/mcp', [...$auth, ...$new], '[{"jsonrpc":"2.0","id":6,"method":"ping"}]')[0])->toBe(400);
+
+    $old = ['Mcp-Session-Id' => raw($server, $loop, 'POST', '/mcp', $auth, $init('2025-03-26'))[1]['mcp-session-id']];
+    raw($server, $loop, 'POST', '/mcp', [...$auth, ...$old], '{"jsonrpc":"2.0","method":"notifications/initialized"}');
+    [$status, , $body] = raw($server, $loop, 'POST', '/mcp', [...$auth, ...$old], '[{"jsonrpc":"2.0","id":7,"method":"ping"},{"jsonrpc":"2.0","id":8,"method":"ping"}]');
+
+    expect($status)->toBe(200)->and(array_column(json_decode($body, true), 'id'))->toBe([7, 8]);
 });

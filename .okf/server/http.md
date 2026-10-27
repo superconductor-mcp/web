@@ -39,13 +39,15 @@ A compiled application (a CAD tool, a printer controller) turns on "MCP server" 
 |---|---|
 | any path but `/mcp` | 404 |
 | `Origin` not localhost | 403, before anything else is looked at |
-| `Authorization` not `Bearer <token>` (constant-time compare) | 401 + `WWW-Authenticate: Bearer` |
+| `Authorization` not `Bearer <token>` (constant-time compare), when a token was given | 401 + `WWW-Authenticate: Bearer` |
 | `Mcp-Session-Id` unknown | 404 |
+| `MCP-Protocol-Version` not a version the server speaks, or not the session's | 400. Absent: the session's version is assumed |
+| a batch body from a 2025-06-18 session | 400; older sessions keep batches |
 | `POST` without a session, body not holding `initialize` | 400 |
 | `POST` `initialize` | new `HttpSession`, random id, reply carries `Mcp-Session-Id` |
 | `POST` requests, all sync | one JSON document: the reply, or an array of replies for a batch |
 | `POST` with an `ASYNC` request | an event stream: progress and replies as events, closed once no request of that POST is in flight (the tick catches a cancelled one) |
-| `POST` notifications or responses only | 202 |
+| `POST` notifications or responses only | 202. A response may answer a request the server sent on a POST stream (elicitation) |
 | `GET` | the listening stream; events the session has not delivered, or those after `Last-Event-ID`, replayed from a ring of `web.session.replay` |
 | `DELETE` | session gone, 200 |
 | other methods | 405 |
@@ -56,4 +58,6 @@ A compiled application (a CAD tool, a printer controller) turns on "MCP server" 
 
 # Config
 
-`config/web.php`: `host`, `port`, `token`, `limits.head`, `limits.body`, `limits.head_timeout`, `session.idle`, `session.replay`, `notifications` (the session's action map).
+Bearer is a switch: `start(..., token: null)`, `--no-auth`, or `web.auth` false. An empty string token throws; off is always explicit. Origin check has no switch: the spec makes it a MUST.
+
+`config/web.php`: `host`, `port`, `token`, `auth`, `limits.head`, `limits.body`, `limits.head_timeout`, `session.idle`, `session.replay`, `notifications` (the session's action map).

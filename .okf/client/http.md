@@ -37,6 +37,8 @@ sources:
 
 An `Mcp-Session-Id` on any response is kept from the first one seen and sent on every later request.
 
+From a 2025-06-18 handshake on, every request also carries `MCP-Protocol-Version` with the negotiated version; the server answers 400 to a missing match, which is why the header comes from `MCPClient::protocolVersion()`, never from config.
+
 # The listening GET
 
 Once the client is `Connected`, a GET with `Accept: text/event-stream` opens the stream the server may speak on. `405`, or anything that is not a `200` event stream, means the server offers none and it is not asked again. `404` with a session fails the client. Every `id:` on the stream is remembered; when the server drops the stream, a timer reopens it one second later with `Last-Event-ID`. A stream dropped `client.stream_reconnects` times in a row without delivering anything is given up.

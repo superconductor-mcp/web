@@ -54,6 +54,14 @@ final class HttpSession
     public function post(Incoming $incoming, string $body, array $headers = []): void
     {
         $this->last_seen = microtime(true);
+
+        // 2025-06-18 removed batches; a session on it gets one refused whole
+        if (LineDecoder::isBatch($body) && ! $this->bag->takesBatches()) {
+            $incoming->respond(400, 'text/plain', "batches are not supported in protocol {$this->bag->protocol_version}", $headers);
+
+            return;
+        }
+
         $messages = LineDecoder::decode($body);
         $requests = array_filter($messages, fn (mixed $m): bool => $m instanceof MCPRequest);
 

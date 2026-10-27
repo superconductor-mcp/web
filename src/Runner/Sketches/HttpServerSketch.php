@@ -8,7 +8,7 @@ use Fabricate\Core\Runner\Sketches\StartMCPServer;
 use SuperconductorMCP\SSE\Server\McpHttpServer;
 
 // `rocket mcp:http <server>`: the local HTTP server from the command line, for development and for harness configs
-#[Sketch('mcp:http {server : The name of the MCP server to serve} {--port= : Port on 127.0.0.1; web.port when omitted} {--token= : Bearer the client must send; web.token when omitted, minted when that is empty too}')]
+#[Sketch('mcp:http {server : The name of the MCP server to serve} {--port= : Port on 127.0.0.1; web.port when omitted} {--token= : Bearer the client must send; web.token when omitted, minted when that is empty too} {--no-auth : Ask for no bearer; same as web.auth false}')]
 class HttpServerSketch extends StartMCPServer
 {
     protected string $description = 'Serve an MCP server over Streamable HTTP on localhost';
@@ -17,12 +17,13 @@ class HttpServerSketch extends StartMCPServer
 
     public function boot(): void
     {
-        $token = (string) ($this->option('token') ?: config('web.token') ?: McpHttpServer::token());
+        $auth = config('web.auth', true) && ! $this->option('no-auth');
+        $token = $auth ? (string) ($this->option('token') ?: config('web.token') ?: McpHttpServer::token()) : null;
         $port = (int) ($this->option('port') ?: config('web.port', 8431));
 
         $this->server->start((string) $this->argument('server'), $port, $token, (string) config('web.host', '127.0.0.1'));
 
-        fwrite(STDERR, "MCP over HTTP at {$this->server->url()}\nAuthorization: Bearer {$token}\n");
+        fwrite(STDERR, "MCP over HTTP at {$this->server->url()}\n".(is_null($token) ? "No bearer required\n" : "Authorization: Bearer {$token}\n"));
     }
 
     public function loop(array $mail = []): SketchLoopResult

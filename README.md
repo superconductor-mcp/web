@@ -4,9 +4,9 @@
 [![Latest Version on Packagist](https://img.shields.io/packagist/v/semiconductor/sse.svg)](https://packagist.org/packages/semiconductor/sse)
 [![License](https://img.shields.io/packagist/l/semiconductor/sse.svg)](LICENSE)
 
-Connect a Venusian app to MCP servers over HTTP: Streamable HTTP (2025-03-26) with the older HTTP with SSE (2024-11-05) as a fallback, both on the app's own event loop.
+Connect a Venusian app to MCP servers over HTTP: Streamable HTTP (2025-03-26, 2025-06-18) with the older HTTP with SSE (2024-11-05) as a fallback, both on the app's own event loop.
 
-`semiconductor/sse` is the HTTP transport for [superconductor/mcp](https://github.com/superconductor-mcp/mcp). An `mcp_servers` entry of type `http` becomes an `MCPClient` on the 2025-03-26 Streamable HTTP transport; type `sse` is the 2024-11-05 transport, deprecated with that protocol version and kept for servers still on it. The server end is `McpHttpServer`: an MCP server on a loopback port that an application switches on from its settings, so a compiled app that cannot speak stdio can still be reached by a harness on the same machine.
+`semiconductor/sse` is the HTTP transport for [superconductor/mcp](https://github.com/superconductor-mcp/mcp). An `mcp_servers` entry of type `http` becomes an `MCPClient` on the Streamable HTTP transport; type `sse` is the 2024-11-05 transport, deprecated with that protocol version and kept for servers still on it. The server end is `McpHttpServer`: an MCP server on a loopback port that an application switches on from its settings, so a compiled app that cannot speak stdio can still be reached by a harness on the same machine.
 
 ```
 superconductor/mcp          messages, procedures, MCPServer, MCPClient, the client manager
@@ -57,7 +57,8 @@ Both connections are loop `WakeSource`s over plain sockets, `http` or `https`, s
 
 **Streamable HTTP**, `HttpConnection`:
 
-- Every message the client sends is its own `POST` to the endpoint with `Accept: application/json, text/event-stream`. A JSON body is delivered once complete; an event stream is delivered event by event; a `202` is done. Either may carry a JSON-RPC batch.
+- Every message the client sends is its own `POST` to the endpoint with `Accept: application/json, text/event-stream`. A JSON body is delivered once complete; an event stream is delivered event by event; a `202` is done. Below 2025-06-18 either may carry a JSON-RPC batch.
+- After a 2025-06-18 handshake every request carries `MCP-Protocol-Version`.
 - The `Mcp-Session-Id` the server gives at initialize rides on every later request. A `404` after that fails the client with "the server ended the session."
 - Once connected, a `GET` opens the stream the server may speak on; `405` means it offers none. When the server drops it, it is reopened with `Last-Event-ID` so nothing is lost, up to `client.stream_reconnects` silent drops in a row.
 - `close()` sends `DELETE` with the session id, waits for the answer or two seconds, then releases.
@@ -103,6 +104,7 @@ What it does: binds `127.0.0.1` only; refuses any `Origin` that is not localhost
 |---|---|---|
 | `host`, `port` | `127.0.0.1`, `8431` | Where `mcp:http` listens. `MCP_HTTP_PORT` in `.env`. |
 | `token` | `MCP_HTTP_TOKEN` | The bearer; empty lets `mcp:http` mint one and print it. |
+| `auth` | `MCP_HTTP_AUTH` | `false` asks for no bearer. Same as `--no-auth`, or `start(..., token: null)` from code. Origin check and loopback binding stay. |
 | `limits.head`, `limits.body`, `limits.head_timeout` | 16 KiB, 1 MiB, 10 s | Request limits: 400, 413, 408. |
 | `session.idle`, `session.replay` | 300, 100 | Seconds before an idle session is dropped; events kept for a resume. |
 | `notifications` | `initialized`, `cancelled` | The session's notification action map. |
@@ -117,7 +119,7 @@ vendor/bin/pest
 The suite runs two fixture servers under the PHP that runs the tests, `tests/Fixtures/http-server.php` (JSON and event-stream replies, session ids, the listening stream and its resume, `DELETE`, `401`, an expired session) and `sse-server.php` (plain and chunked streams, `401`, a `text/plain` answer, the fallback target). No network beyond `127.0.0.1`.
 
 ```console
-Tests:    16 passed (68 assertions)
+Tests:    19 passed (81 assertions)
 ```
 
 The server suite runs `McpHttpServer` on a free port: raw-socket refusals (404, 405, 401, 403, 400, 413, 408), the package's own `HttpConnection` end to end, and a `Last-Event-ID` resume. Both clients are also proven against the official TypeScript SDK (1.22.0), `StreamableHTTPServerTransport` and `SSEServerTransport`, and the server against its `StreamableHTTPClientTransport`: handshake, `tools/list`, `ping`, tool calls with streamed progress, session termination. The Streamable HTTP client has run against a production server behind a bearer token.

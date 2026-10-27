@@ -2,7 +2,7 @@
 
 1. **Read [`.okf/index.md`](.okf/index.md) first** before changing a connection or the server.
 2. **This is a transport, not the protocol.** Messages, procedures, ids, capabilities and errors belong to superconductor/mcp. A protocol change goes upstream first.
-3. **Two transports, one spec page each.** `HttpConnection` is 2025-03-26 Streamable HTTP: one endpoint, a POST per message answered with JSON or an event stream, `Mcp-Session-Id`, a listening GET, DELETE on close. `SseConnection` is 2024-11-05 HTTP with SSE, deprecated, kept as the fallback. Check the spec page before changing either. See [`.okf/client/http.md`](.okf/client/http.md) and [`.okf/client/connection.md`](.okf/client/connection.md).
+3. **Two transports, one spec page each.** `HttpConnection` is Streamable HTTP (2025-03-26 and 2025-06-18): one endpoint, a POST per message answered with JSON or an event stream, `Mcp-Session-Id`, `MCP-Protocol-Version` from 2025-06-18, a listening GET, DELETE on close. `SseConnection` is 2024-11-05 HTTP with SSE, deprecated, kept as the fallback. Check the spec page before changing either. See [`.okf/client/http.md`](.okf/client/http.md) and [`.okf/client/connection.md`](.okf/client/connection.md).
 4. **The connection never blocks.** Each connection is one `WakeSource` over `Http\Exchange` sockets, read and written on wakes only. No `stream_select` loops, no blocking reads, no HTTP client that does its own waiting. HTTP and SSE parsing live in `src/Http` once, for both.
 5. **Decoded events go straight to the client**, never to loop mail: two servers can both answer id 1.
 6. **Credentials ride the entry's `headers`** on every request, and the TLS peer is always verified. No option switches either off.

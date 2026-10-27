@@ -33,7 +33,7 @@ it('opens the stream, posts to the endpoint it names, and reads the replies as e
         ->and(array_column($client->tools(), 'name'))->toBe(['noop']);
 
     $client->ping()->wait();
-    expect($client->callTool('noop', ['a' => 1])->wait()->content[0]['text'])->toBe('{"a":1}');
+    expect($client->callTool('noop', ['a' => 1])->wait()->content[0]->value)->toBe('{"a":1}');
 
     // the server's own request arrives on the stream and is answered with a POST
     $client->callTool('ping-me')->wait();

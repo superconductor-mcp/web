@@ -29,13 +29,13 @@ it('posts every message to the one endpoint, keeps the session id, and ends the 
 
     $client->open();
     expect($client->ready()->wait())->toBe($client)
-        ->and($client->protocolVersion())->toBe('2025-03-26')
+        ->and($client->protocolVersion())->toBe('2025-06-18')
         ->and($client->serverInfo()['name'])->toBe('http-server')
         ->and(array_column($client->tools(), 'name'))->toBe(['add']);
 
     // the fixture answers 400 to any request after initialize that lacks the session id, so these prove it is sent
     $client->ping()->wait();
-    expect($client->callTool('add', ['a' => 2, 'b' => 3])->wait()->content[0]['text'])->toBe('5');
+    expect($client->callTool('add', ['a' => 2, 'b' => 3])->wait()->content[0]->value)->toBe('5');
 
     // a GET answered 405 means no stream, and that is fine
     expect($client->status())->toBe(ClientStatus::Connected);
@@ -57,7 +57,7 @@ it('reads a reply that arrives as an event stream, with what the server sent bef
     $client->open();
     $client->ready()->wait();
 
-    expect($client->callTool('add', ['a' => 1, 'b' => 1])->wait()->content[0]['text'])->toBe('2')
+    expect($client->callTool('add', ['a' => 1, 'b' => 1])->wait()->content[0]->value)->toBe('2')
         ->and(json_encode(log_entries()))->toContain('half way');
 });
 
@@ -80,7 +80,7 @@ it('falls back to 2024-11-05 HTTP with SSE when the endpoint refuses the initial
     $client->open();
     expect($client->ready()->wait())->toBe($client)
         ->and($client->serverInfo()['name'])->toBe('sse-server');
-    expect($client->callTool('noop', ['a' => 1])->wait()->content[0]['text'])->toBe('{"a":1}');
+    expect($client->callTool('noop', ['a' => 1])->wait()->content[0]->value)->toBe('{"a":1}');
 
     $client->close();
     $loop->until(function () use ($client): bool { return $client->closed(); });

@@ -18,7 +18,7 @@ use Voyager\IOPools\Waiter\Wakes\Writable;
 
 /**
  * An MCP server on a local port, 2025-03-26 Streamable HTTP. Made for an application that switches it on from a
- * settings screen: start() joins the running loop, stop() leaves it. Loopback only, one bearer token, one endpoint.
+ * settings screen: start() joins the running loop, stop() leaves it. Loopback only, one endpoint, one optional bearer token.
  */
 final class McpHttpServer extends WakeSource
 {
@@ -33,7 +33,8 @@ final class McpHttpServer extends WakeSource
 
     private ?MCPServer $server = null;
 
-    private string $token = '';
+    // null: no bearer is asked for
+    private ?string $token = null;
 
     private int $port = 0;
 
@@ -60,15 +61,17 @@ final class McpHttpServer extends WakeSource
     /**
      * @param MCPServer|string $server the server, or its #[Server] name
      * @param int $port 0 picks a free one; port() says which
+     * @param string|null $token the bearer every request must carry; null turns the check off
      */
-    public function start(MCPServer|string $server, int $port, string $token, string $host = '127.0.0.1'): self
+    public function start(MCPServer|string $server, int $port, ?string $token, string $host = '127.0.0.1'): self
     {
         if ($this->running()) {
             throw new RuntimeException('the MCP HTTP server is already running.');
         }
 
+        // an empty string is a mistake, not a choice: switching the check off is null
         if ($token === '') {
-            throw new RuntimeException('the MCP HTTP server needs a token; McpHttpServer::token() makes one.');
+            throw new RuntimeException('the MCP HTTP server token is empty; pass null to run without one, or McpHttpServer::token() for one.');
         }
 
         $this->server = is_string($server) ? $this->servers->get($server) : $server;
@@ -219,7 +222,7 @@ final class McpHttpServer extends WakeSource
             return;
         }
 
-        if (! hash_equals('Bearer '.$this->token, (string) $request->header('authorization'))) {
+        if (! is_null($this->token) && ! hash_equals('Bearer '.$this->token, (string) $request->header('authorization'))) {
             $connection->respond(401, 'text/plain', 'unauthorized', ['WWW-Authenticate' => 'Bearer']);
 
             return;
@@ -230,6 +233,15 @@ final class McpHttpServer extends WakeSource
 
         if (! is_null($session_id) && is_null($session)) {
             $connection->respond(404, 'text/plain', 'session not found');
+
+            return;
+        }
+
+        // 2025-06-18: a version header must name one this server speaks and, inside a session, the one it negotiated
+        $version = $request->header('mcp-protocol-version');
+
+        if (! is_null($version) && (! in_array($version, config('mcp.servers.supported_mcp_versions', []), true) || (! is_null($session) && $version !== $session->bag->protocol_version))) {
+            $connection->respond(400, 'text/plain', "unsupported MCP-Protocol-Version [{$version}]");
 
             return;
         }
