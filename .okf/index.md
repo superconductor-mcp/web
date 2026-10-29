@@ -2,17 +2,15 @@
 okf_version: "0.2"
 ---
 
-# semiconductor/sse
+# superconductor/web
 
-# Client
-
-* [Streamable HTTP](client/http.md) - `HttpConnection` (2025-03-26): one endpoint, a POST per message answered with JSON or an event stream, the session id, the listening GET and its resume, DELETE on close, the 2024-11-05 fallback.
-* [Connection](client/connection.md) - `SseConnection` (2024-11-05, deprecated): the GET stream, the endpoint event, one POST per message, SSE and chunked parsing, failures, close.
+* [Transport](architecture/transport.md) - What this package owns (the routes, three controllers, the guards, the event stream) and what it leaves to superconductor/core and venusian/serve.
 
 # Server
 
-* [Local HTTP server](server/http.md) - `McpHttpServer`: an MCP server on a loopback port an application switches on; sessions, POST/GET/DELETE, bearer and Origin checks, the tick.
+* [Sessions](server/sessions.md) - `HttpSessions` and `HttpSession`: opened on initialize, found by id and server, kept alive by streams and requests in flight, forgotten on DELETE or idle.
 
 # Reference
 
+* [Config](reference/config.md) - Every key in `config/sse.php` and who reads it.
 * [Log](log.md) - Changes that altered behaviour.

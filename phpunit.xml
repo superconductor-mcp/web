@@ -7,7 +7,7 @@
          failOnRisky="true"
 >
     <testsuites>
-        <testsuite name="SemiconductorSSE">
+        <testsuite name="SuperconductorMCPWeb">
             <directory suffix="Test.php">./tests</directory>
         </testsuite>
     </testsuites>

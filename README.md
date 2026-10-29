@@ -1,128 +1,155 @@
-# semiconductor/sse
+<div align="center" id="header">
 
-[![Tests](https://github.com/superconductor-mcp/sse/actions/workflows/tests.yml/badge.svg)](https://github.com/superconductor-mcp/sse/actions/workflows/tests.yml)
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/semiconductor/sse.svg)](https://packagist.org/packages/semiconductor/sse)
-[![License](https://img.shields.io/packagist/l/semiconductor/sse.svg)](LICENSE)
+<h1>superconductor/web</h1>
+<h3>The Streamable HTTP transport for Superconductor MCP: serve your MCP servers as routes of your own application</h3>
 
-Connect a Venusian app to MCP servers over HTTP: Streamable HTTP (2025-03-26, 2025-06-18) with the older HTTP with SSE (2024-11-05) as a fallback, both on the app's own event loop.
+[![CI](https://img.shields.io/github/actions/workflow/status/superconductor-mcp/web/tests.yml?style=flat-square&label=CI)](https://github.com/superconductor-mcp/web/actions/workflows/tests.yml)
+[![Packagist](https://img.shields.io/packagist/v/superconductor/web?style=flat-square)](https://packagist.org/packages/superconductor/web)
+[![PHP](https://img.shields.io/packagist/dependency-v/superconductor/web/php?style=flat-square&label=PHP)](https://packagist.org/packages/superconductor/web)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-5b4ee6?style=flat-square)](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
+[![License](https://img.shields.io/github/license/superconductor-mcp/web?style=flat-square)](LICENSE)
+[![OKF](https://img.shields.io/badge/OKF-0.2-6f42c1?style=flat-square&label=knowledge%20bundle)](.okf/index.md)
 
-`semiconductor/sse` is the HTTP transport for [superconductor/mcp](https://github.com/superconductor-mcp/mcp). An `mcp_servers` entry of type `http` becomes an `MCPClient` on the Streamable HTTP transport; type `sse` is the 2024-11-05 transport, deprecated with that protocol version and kept for servers still on it. The server end is `McpHttpServer`: an MCP server on a loopback port that an application switches on from its settings, so a compiled app that cannot speak stdio can still be reached by a harness on the same machine.
+</div>
 
+MCP's Streamable HTTP transport puts a server behind one URL: the client POSTs JSON-RPC messages to it and reads the answers as server-sent events, opens a GET stream for what the server says on its own, and ends its session with a DELETE. Remote harnesses speak it, and so does anything that can make an HTTP request.
+
+[superconductor/core](https://github.com/superconductor-mcp/core) speaks the protocol but knows no transport by name. <b>The only problem?</b> Someone has to own the routes.
+
+superconductor/web owns them. It adds `POST`, `GET` and `DELETE /mcp/{server}` to the application's own router, so a server you wrote for [superconductor/stdio](https://github.com/superconductor-mcp/stdio) is served over HTTP by the application that already serves your web routes, on the same event loop, with no second process. It serves; it has no HTTP client.
+
+## Basic usage
+
+Most ways you will interface with superconductor/web are in two parts -
+
+**Serving** a server defined with superconductor/core. Every `#[Server]` class is at `/mcp/{name}`:
+
+```bash
+php computer serve            # venusian/serve: http://127.0.0.1:8020/mcp/concept
 ```
-superconductor/mcp          messages, procedures, MCPServer, MCPClient, the client manager
-  → semiconductor/stdio     the stdio transport: serve as a child process, consume one
-  → semiconductor/sse       the HTTP transports: consume a server over Streamable HTTP or SSE, serve one on localhost   ← this package
+
+```console
+$ curl -si http://127.0.0.1:8020/mcp/concept \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"me","version":"1"}}}'
+HTTP/1.1 200 OK
+Content-Type: text/event-stream; charset=utf-8
+Mcp-Session-Id: 6f1c…
+
+event: message
+data: {"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-06-18","capabilities":{…},"serverInfo":{…}}}
+```
+
+Every later request carries `Mcp-Session-Id` and, once the client has initialized, `MCP-Protocol-Version`.
+
+**Configuring** what is served and who may reach it, in `config/sse.php`:
+
+```php
+return [
+    'allowed_hosts' => ['localhost', '127.0.0.1', '[::1]', 'mcp.internal'],
+    'session' => ['idle_timeout' => 900],
+];
 ```
 
 ## Requirements
 
-- PHP 8.4 or newer
-- A Venusian 0.10 application (`venusian-voyager/io-pools` 0.10)
-- `superconductor/mcp` 0.10
+| | |
+|---|---|
+| PHP | 8.4.27 or newer in 8.4, or 8.5.12 or newer. |
+| VenusianPHP | A 0.11 application with `venusian-mariner/http`, `nuts-and-bolts` and `routing`, which `venusian/serve` provides, and `venusian-voyager/contracts` and `nuts-and-bolts`. |
+| superconductor/core | 0.11. This package adds the transport only. |
+| A server | `venusian/serve` serving the application: `php computer serve`, or an `HttpServer` a sketch attaches to its own loop. It runs several requests at once (`serve.max_in_flight`, 10 by default), which a tool that waits for the user's answer needs. |
+| Protocol | The versions superconductor/core is configured for: 2025-06-18, 2025-03-26 and 2024-11-05. |
 
 ## Installation
 
 ```bash
-composer require superconductor/mcp semiconductor/sse
+composer require superconductor/core superconductor/web
 ```
 
-The service provider is discovered automatically. It registers the `http` and `sse` creators on the client manager, `mcp.clients`, binds `McpHttpServer` as a singleton, adds `mcp:http` to the sketches, and merges `config/web.php`. Publish it with `php computer vendor:publish --tag=web-config`.
-
-## Connecting
-
-Name the server in `config/mcp.php`. `url` is the MCP endpoint; `headers` go on every request the connection makes, which is where a bearer token or any other credential header goes. `fallback => false` turns off the try of the old transport when the endpoint answers `4xx` to initialize.
-
-```php
-'mcp_servers' => [
-    'remote' => [
-        'type' => 'http',
-        'url' => 'https://mcp.example.com/mcp',
-        'headers' => ['Authorization' => 'Bearer '.env('REMOTE_MCP_TOKEN')],
-    ],
-],
-```
-
-```php
-$remote = app(ClientManager::class)->client('remote');
-$remote->ready()->wait();                       // handshake done, session kept, lists cached
-$remote->tools();
-$remote->callTool('add', ['a' => 2, 'b' => 3])->wait()->content;
-```
-
-Everything on `MCPClient` works the same as over stdio: promises for every call, caches that refill on `list_changed`, server pings answered, `close()` and `closeAll()`.
-
-## How the connection works
-
-Both connections are loop `WakeSource`s over plain sockets, `http` or `https`, sharing one HTTP exchange and one SSE parser.
-
-**Streamable HTTP**, `HttpConnection`:
-
-- Every message the client sends is its own `POST` to the endpoint with `Accept: application/json, text/event-stream`. A JSON body is delivered once complete; an event stream is delivered event by event; a `202` is done. Below 2025-06-18 either may carry a JSON-RPC batch.
-- After a 2025-06-18 handshake every request carries `MCP-Protocol-Version`.
-- The `Mcp-Session-Id` the server gives at initialize rides on every later request. A `404` after that fails the client with "the server ended the session."
-- Once connected, a `GET` opens the stream the server may speak on; `405` means it offers none. When the server drops it, it is reopened with `Last-Event-ID` so nothing is lost, up to `client.stream_reconnects` silent drops in a row.
-- `close()` sends `DELETE` with the session id, waits for the answer or two seconds, then releases.
-- A `4xx` to the initialize POST hands the client to the old transport on the same url, as the spec's compatibility path says.
-
-**HTTP with SSE**, `SseConnection`, deprecated:
-
-- `open()` connects asynchronously and sends `GET <url>` with `Accept: text/event-stream`. Anything but `200` with that content type fails the client with the server's answer.
-- The server's first event is `endpoint`, the URI to POST to, absolute or relative to the stream's url. Messages sent before it arrives wait for it.
-- Each message the client sends is its own `POST` with `Content-Type: application/json`. A `2xx` is all the server owes; its reply comes down the stream as a `message` event. Anything else fails the client.
-- The stream is read on wakes, dechunked when the server uses chunked transfer encoding, and parsed as SSE: `event:` and `data:` lines, a blank line dispatches. Each `message` event is one JSON-RPC line, decoded and handed straight to the connection's own client, never to loop mail.
-- `close()` drops the stream and any POST in flight; the server sees the stream end. A stream the server closes fails the client with "the server closed the event stream."
-
-## Serving
-
-The server is for one use: an application running on a desk turns on an MCP port so a harness on the same machine can drive it. From app code, on the loop that is already running:
-
-```php
-$server = app(McpHttpServer::class);
-$token = McpHttpServer::token();          // show this in the settings screen
-$server->start('cad', port: 8431, token: $token);
-// ... the settings toggle goes off:
-$server->stop();
-```
-
-From the command line, for development:
+The provider is discovered. It merges `config/sse.php`, registers the controllers and middleware in the container, aliases the middleware on the router as `mcp.<key>` and loads `routes/web.php`. Publish the config to change any of it:
 
 ```bash
-php rocket mcp:http concept --port=8431 --token=devtoken
+php computer vendor:publish --tag=sse-config
 ```
 
-In a harness, the entry is the url and the bearer:
+## Configuration
 
-```json
-{ "mcpServers": { "cad": { "type": "http", "url": "http://127.0.0.1:8431/mcp", "headers": { "Authorization": "Bearer devtoken" } } } }
-```
-
-What it does: binds `127.0.0.1` only; refuses any `Origin` that is not localhost (403) and any request without the bearer (401); mints an `Mcp-Session-Id` at `initialize` and keeps one session per id; answers a POST with JSON, or with an event stream when a procedure runs async (progress first, then the reply); keeps a listening GET stream per session with `Last-Event-ID` resume; ends a session on DELETE or after `session.idle` seconds. Every response closes its connection. No TLS, no users, no OAuth: the token is the lock, and the port never leaves the machine.
-
-`config/web.php`:
+`config/sse.php`:
 
 | Key | Default | What it does |
 |---|---|---|
-| `host`, `port` | `127.0.0.1`, `8431` | Where `mcp:http` listens. `MCP_HTTP_PORT` in `.env`. |
-| `token` | `MCP_HTTP_TOKEN` | The bearer; empty lets `mcp:http` mint one and print it. |
-| `auth` | `MCP_HTTP_AUTH` | `false` asks for no bearer. Same as `--no-auth`, or `start(..., token: null)` from code. Origin check and loopback binding stay. |
-| `limits.head`, `limits.body`, `limits.head_timeout` | 16 KiB, 1 MiB, 10 s | Request limits: 400, 413, 408. |
-| `session.idle`, `session.replay` | 300, 100 | Seconds before an idle session is dropped; events kept for a resume. |
-| `notifications` | `initialized`, `cancelled` | The session's notification action map. |
+| `routes` | `null` | The routes file the provider loads; `null` loads the package's own `routes/web.php`. |
+| `path` | `mcp/{server}` | The endpoint. `{server}` is the name of a registered `MCPServer`. |
+| `controllers.messages` / `.stream` / `.session` | the package's three | The class behind POST, GET and DELETE. An application's own class named here is the one that answers. |
+| `middleware` | `host`, `protocol`, `session` | Every entry runs on the endpoint, in this order, under the router alias `mcp.<key>`. |
+| `allowed_hosts` | `localhost`, `127.0.0.1`, `[::1]` | The hosts the `Host` and `Origin` headers may name; `*` allows any. |
+| `session.idle_timeout` | `1800` | Seconds a session may go without a request or an open stream before it is forgotten. |
+| `session.poll_interval` | `0.1` | Seconds between two looks at the server's queued notifications on an open GET stream. |
+| `notifications` | `initialized`, `cancelled` | Method to Action class (`Fabricate\Mechanism\Session\Actions`) for notifications a client sends. |
 
-## Testing
+## The endpoint
+
+| Request | Answer |
+|---|---|
+| `POST` with an `initialize` request | `200`, an event stream carrying the response, and an `Mcp-Session-Id` header. A refused initialize leaves no session behind. |
+| `POST` with requests | `200`, an event stream that also carries what the server sends while they run (progress, log messages, elicitation) and ends once every request is answered or cancelled. |
+| `POST` with only notifications or responses | `202`, no body. |
+| `GET` | `200`, an event stream for what the server sends outside any request; it stays open until the session ends or the client hangs up. |
+| `DELETE` | `204`, and the session is forgotten. |
+
+Refusals: `403` for a `Host` or `Origin` that is not allowed, `400` for an unsupported `MCP-Protocol-Version`, `400` for a request with no `Mcp-Session-Id` (except to initialize on a registered server), `404` for an unknown session id, a session id used on another server, or an unknown `{server}`, `406` when requests are POSTed or a stream is asked for without `Accept: text/event-stream`, and `400` for a batch on a session that does not take batches (2025-06-18).
+
+Each session runs its own instance of the server it was opened on. Sessions are kept in memory by the process that serves them.
+
+## Packages you might use with this one
+
+| Package | Gives |
+|---|---|
+| [superconductor/core](https://github.com/superconductor-mcp/core) | The protocol: servers, clients, messages, procedures. Required. |
+| [superconductor/stdio](https://github.com/superconductor-mcp/stdio) | The stdio transport, for servers a harness starts as a child process. |
+
+## AI-assisted development
+
+This codebase was built with LLM assistance under human direction. Prompts, reviews, and architectural decisions were owned by a professional software engineer — the model accelerates drafting and exploration; it does not replace judgment on APIs, dependency direction, or what ships.
+
+## Agentic Documentation
+
+This repository carries an [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md) bundle at [`.okf/`](.okf/): Markdown with YAML frontmatter, readable by you and loadable by a coding agent. It records what the README doesn't: how a request becomes a session and a stream, why a session's streams and in-flight requests keep it alive, what the guards refuse and in what order, and a log of every change that altered behaviour.
+
+Start at [`.okf/index.md`](.okf/index.md). [`AGENTS.md`](AGENTS.md) is the short rule sheet an agent reads before touching the controllers, the middleware or the sessions; each rule points into the bundle for the reason behind it.
+
+Point your agent at the repo and it has the same context the maintainer has. Point yourself at it when the README's answer is "it does X" and you want "because".
+
+## Resources
+
+* [MCP transports, 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports): the Streamable HTTP rules this package follows, including the session header, the protocol version header and the Origin check.
+* [superconductor/core](https://github.com/superconductor-mcp/core): the protocol this transport carries.
+* [VenusianPHP](https://github.com/VenusianPHP): the router, the HTTP server and the IOPools loop.
+* [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md): the spec the [`.okf/`](.okf/) bundle follows.
+
+## Running the test suite
+
+The suite is Pest v4. It boots a fixture application, attaches a real `HttpServer` on a free port and talks to it over raw sockets, so every case runs the route, the middleware, the controller and the session end to end. No test needs a terminal or a network. `venusian/serve` and `venusian/framework` are in `require-dev`; to develop against local checkouts, copy `composer.json` to a gitignored `composer.dev.json` with symlinked path repositories to `../core`, `venusian/serve` and `venusian/framework`, then install with `COMPOSER=composer.dev.json`.
 
 ```bash
+git clone https://github.com/superconductor-mcp/web.git
+cd web
 composer install
 vendor/bin/pest
 ```
 
-The suite runs two fixture servers under the PHP that runs the tests, `tests/Fixtures/http-server.php` (JSON and event-stream replies, session ids, the listening stream and its resume, `DELETE`, `401`, an expired session) and `sse-server.php` (plain and chunked streams, `401`, a `text/plain` answer, the fallback target). No network beyond `127.0.0.1`.
-
 ```console
-Tests:    19 passed (81 assertions)
+Tests:    27 passed (78 assertions)
 ```
 
-The server suite runs `McpHttpServer` on a free port: raw-socket refusals (404, 405, 401, 403, 400, 413, 408), the package's own `HttpConnection` end to end, and a `Last-Event-ID` resume. Both clients are also proven against the official TypeScript SDK (1.22.0), `StreamableHTTPServerTransport` and `SSEServerTransport`, and the server against its `StreamableHTTPClientTransport`: handshake, `tools/list`, `ping`, tool calls with streamed progress, session termination. The Streamable HTTP client has run against a production server behind a bearer token.
+## Contributing
+
+Open an issue first for anything beyond a typo. Pull requests come with a Pest test for the behaviour and keep CI green. A protocol change goes to superconductor/core first; this package moves messages over HTTP. Read [`AGENTS.md`](AGENTS.md) for the rules the code follows.
+
+## Security
+
+The endpoint is reachable by whatever can reach the port serve listens on; it checks `Host` and `Origin` against an allow-list and binds to localhost by default. See [SECURITY.md](SECURITY.md) for the model and how to report a vulnerability.
 
 ## License
 

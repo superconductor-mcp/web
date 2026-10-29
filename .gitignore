@@ -1,41 +1,9 @@
-# Composer (tests only)
+# Composer (tests only); composer.dev.json is the local-path install: COMPOSER=composer.dev.json composer install
 /vendor/
 /composer.lock
+/composer.dev.json
+/composer.dev.lock
 /.phpunit.cache/
 /.phpunit.result.cache
-
-# phpize / autoconf / make output from building in place
-/.libs/
-/autom4te.cache/
-/build/
-/include/
-/modules/
-/Makefile
-/Makefile.fragments
-/Makefile.global
-/Makefile.objects
-/acinclude.m4
-/aclocal.m4
-/config.guess
-/config.h
-/config.h.in
-/config.h.in~
-/config.log
-/config.nice
-/config.status
-/config.sub
-/configure
-/configure~
-/configure.ac
-/install-sh
-/libtool
-/ltmain.sh
-/missing
-/mkinstalldirs
-/run-tests.php
-*.dep
-*.la
-*.lo
-*.o
 
 .DS_Store
