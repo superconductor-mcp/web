@@ -18,6 +18,9 @@ final class McpApp
     /** @var array<string, mixed> the fixture app's config/sse.php, read as the app boots */
     public static array $sse = [];
 
+    /** @var list<class-string> the providers to register instead of bootstrap/providers.php's, in this order */
+    public static array $providers = [];
+
     public static function boot(): RenderedInstance
     {
         $app = require __DIR__.'/app/bootstrap/app.php';
@@ -30,6 +33,7 @@ final class McpApp
     public static function tearDown(TestCase $test): void
     {
         self::$sse = [];
+        self::$providers = [];
         Facade::clearResolvedInstances();
         Facade::setFacadeApplication(null);
         HandleExceptions::flushState($test);

@@ -31,7 +31,8 @@ class ResolveSession
 
         $session = $this->sessions->find($id, (string) $request->route('server'));
 
-        if (is_null($session)) {
+        // a session is its opener's: another user's token gets the same answer as an unknown id
+        if (is_null($session) || $session->owner !== $request->attributes->get(Authenticate::USER)?->getAuthIdentifier()) {
             return self::refuse(404, 'No such session.');
         }
 

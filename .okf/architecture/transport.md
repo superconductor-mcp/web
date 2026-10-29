@@ -5,7 +5,7 @@ description: What this package owns (the routes, three controllers, the guards, 
 resource: src
 tags: [mcp, http, sse, transport]
 status: draft
-generated: { by: claude-sonnet-5-5/claude-code, at: 2026-10-29T01:00:00Z }
+generated: { by: claude-opus-5-5/claude-code, at: 2026-10-29T02:00:00Z }
 sources:
   - id: provider
     resource: src/Providers/SSEServiceProvider.php
@@ -34,6 +34,12 @@ sources:
   - id: events
     resource: src/Http/EventStream.php
     title: EventStream
+  - id: resume-tests
+    resource: tests/Http/ResumeTest.php
+    title: Event ids, priming and resuming a stream
+  - id: spec-resume
+    resource: https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#resumability-and-redelivery
+    title: Streamable HTTP, resumability and redelivery (2025-11-25)
   - id: tests
     resource: tests/Http/SessionsTest.php
     title: The endpoint end to end over raw sockets
@@ -58,8 +64,9 @@ MCP's Streamable HTTP transport is one URL: POST for the client's messages, GET 
 The endpoint's middleware run in the order `sse.middleware` lists them:
 
 1. `ValidateHost`: the `Host` header, and `Origin` when one is sent, must each name a host in `sse.allowed_hosts` (ports ignored, case folded, an IPv6 literal keeps its brackets); `*` allows any. Otherwise `403`. This is the DNS-rebinding defence the transport specification asks for.[^host]
-2. `ValidateProtocolVersion`: an `MCP-Protocol-Version` header that is not in `mcp.servers.supported_mcp_versions` is `400`; no header passes.[^protocol]
-3. `ResolveSession`: the `Mcp-Session-Id` header names a session, which goes on the request as the `mcp.session` attribute. No header is `400` on GET and DELETE and passes on POST, where the controller requires it for anything but `initialize`. An id that is unknown, or belongs to another server, is `404`.[^resolve]
+2. `Authenticate`: with `sse.authorization.guard` set, a bearer token that guard accepts, else `401` (or `403` for a missing scope); see [Authorization](authorization.md). Without a guard it passes.
+3. `ValidateProtocolVersion`: an `MCP-Protocol-Version` header that is not in `mcp.servers.supported_mcp_versions` is `400`; no header passes.[^protocol]
+4. `ResolveSession`: the `Mcp-Session-Id` header names a session, which goes on the request as the `mcp.session` attribute. No header is `400` on GET and DELETE and passes on POST, where the controller requires it for anything but `initialize`. An id that is unknown, belongs to another server, or (with authorization on) was opened by another user, is `404`.[^resolve]
 
 A guard answers with a status and a plain-text reason, not a JSON-RPC error.
 
@@ -73,15 +80,19 @@ A tool that waits for the user (elicitation) holds its POST open while the answe
 
 # GET
 
-`StreamController` answers `406` without `Accept: text/event-stream`, otherwise opens a stream for what the server sends outside any request. Every `sse.session.poll_interval` seconds it flushes the session's outbox into the stream and waits on the loop; it runs until the session is closed. If the client hangs up, venusian/serve cancels the request, the stream stops counting against the session and the session stays.[^stream]
+`StreamController` answers `406` without `Accept: text/event-stream`. Otherwise it opens the session's listening stream for what the server sends outside any request: while a connection follows it, every `sse.session.poll_interval` seconds the session's outbox moves into it, and it runs until the session is closed. With no connection following, the outbox is left alone, so what the server queues meanwhile waits there rather than in a stream nobody reads.[^stream][^resume-tests]
+
+With a `Last-Event-ID` that names one of the session's streams, it resumes that stream instead, a GET's or a POST's, from after that event; an id naming no stream of the session opens a new listening stream. If the client hangs up, venusian/serve cancels the request, the stream stops counting against the session, and the stream and session stay for the client to come back to.[^stream][^resume-tests]
 
 # DELETE
 
 `SessionController` forgets the session and answers `204`; its open streams end on their next look.[^session]
 
-# Events
+# Events and resuming
 
-`EventStream` collects the JSON lines a session sends and writes each as `event: message` / `data: <json>` when flushed, either as they are pushed (POST) or on each poll (GET).[^events]
+`EventStream` is one stream of a session, registered on the `HttpSession` until a connection follows it to its end. Each JSON line pushed onto it gets the next number on that stream and goes out as `id: <stream>:<seq>`, `event: message`, `data: <json>`, so ids are unique across the session's streams and name the stream they belong to. A 2025-11-25 session's stream opens with `id: <stream>:0` and empty data, so a client can resume a stream before it has carried anything; an older session's is not primed, since its client may not parse an empty event.[^events][^spec-resume]
+
+A dropped connection is not a cancellation: the POST's requests run on, and what they send waits on their stream. A GET with `Last-Event-ID: <stream>:<n>` writes that stream's events after `n`, never another stream's, then follows it as the first connection would have; a POST stream ends once its requests are answered, and is then let go. A stream keeps the last `sse.session.replay_events` events it wrote (100) for such a replay, and every event it has not written yet. The server never closes a stream to make the client poll.[^events][^resume-tests][^spec-resume]
 
 [^provider]: SSEServiceProvider
 [^routes]: The routes
@@ -95,3 +106,5 @@ A tool that waits for the user (elicitation) holds its POST open while the answe
 [^elicitation-tests]: A question on the POST stream, the answer in a second POST
 [^tests]: The endpoint end to end over raw sockets
 [^spec]: Transports, 2025-06-18
+[^resume-tests]: Event ids, priming and resuming a stream
+[^spec-resume]: Streamable HTTP, resumability and redelivery (2025-11-25)

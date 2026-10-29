@@ -12,8 +12,9 @@ use Voyager\Contracts\IOPools\Loop;
 
 /**
  * GET: a server-sent event stream for what the server sends outside any request (list changes, log
- * messages, resource updates). It stays open until the session ends or the client hangs up; a hang-up
- * cancels it, and the session stays for the client to open another.
+ * messages, resource updates), open until the session ends. With Last-Event-ID it resumes the stream that
+ * id names instead, a GET's or a POST's, replaying what came after it on that stream only. A client that
+ * hangs up has this request cancelled; its stream and session stay for it to come back to.
  */
 class StreamController
 {
@@ -28,27 +29,36 @@ class StreamController
         /** @var HttpSession $session */
         $session = $request->attributes->get(ResolveSession::ATTRIBUTE);
 
-        return new StreamedResponse(function () use ($session) {
-            $stream = new EventStream();
+        // an id naming a stream already ended (or never this session's) has nothing to replay: listen afresh
+        [$stream, $after] = $session->resumable((string) $request->headers->get('Last-Event-ID'))
+            ?? [$session->openStream(fn (): bool => $session->closed, listening: true), 0];
+
+        return new StreamedResponse(function () use ($session, $stream, $after) {
             $session->streams++;
+            $poll = $stream->listening ? $this->poll($session, $stream) : null;
 
             try {
-                while (! $session->closed) {
-                    $session->session->flushOutbox($stream->push(...));
-                    $stream->flush();
-                    $this->sleep((float) config('sse.session.poll_interval', 0.1));
-                }
+                $session->follow($stream, $this->event_loop, $after);
             } finally {
+                if (! is_null($poll)) {
+                    // a registered timer stays named on the loop until forgotten
+                    $poll->cancel();
+                    $this->event_loop->forget("sse.poll.{$session->id}.{$stream->id}");
+                }
+
                 $session->streams--;
                 $session->last_seen = microtime(true);
             }
         }, 200, ['Content-Type' => 'text/event-stream', 'Cache-Control' => 'no-cache']);
     }
 
-    private function sleep(float $seconds): void
+    // while a connection follows a listening stream, what the server queued outside any request moves into it
+    private function poll(HttpSession $session, EventStream $stream): \Voyager\Contracts\IOPools\LoopResources\Timer
     {
-        $woken = $this->event_loop->promise();
-        $this->event_loop->at($seconds, fn () => $woken->resolve(null));
-        $this->event_loop->await($woken);
+        return $this->event_loop->every(
+            (float) config('sse.session.poll_interval', 0.1),
+            fn () => $session->session->flushOutbox($stream->push(...)),
+            "sse.poll.{$session->id}.{$stream->id}",
+        );
     }
 }

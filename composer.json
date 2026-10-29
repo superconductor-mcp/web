@@ -20,16 +20,24 @@
     "require": {
         "php": "~8.4.27||^8.5.12",
         "superconductor/core": "^0.11.0",
+        "venusian-mariner/auth": "^0.11.0",
         "venusian-mariner/http": "^0.11.0",
         "venusian-mariner/nuts-and-bolts": "^0.11.0",
         "venusian-mariner/routing": "^0.11.0",
+        "venusian-mariner/session": "^0.11.0",
+        "venusian-mariner/view": "^0.11.0",
         "venusian-voyager/contracts": "^0.11.0",
+        "venusian-voyager/database": "^0.11.0",
+        "venusian-voyager/http": "^0.11.0",
         "venusian-voyager/nuts-and-bolts": "^0.11.0"
     },
     "require-dev": {
         "pestphp/pest": "^4.0",
         "venusian/framework": "^0.11.0",
-        "venusian/serve": "^0.11.0"
+        "venusian/serve": "^0.11.1"
+    },
+    "conflict": {
+        "venusian/serve": "<0.11.1"
     },
     "autoload": {
         "psr-4": {

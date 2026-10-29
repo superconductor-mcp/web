@@ -10,7 +10,7 @@ use Fabricate\NutsAndBolts\Messages\MCPRequest;
 use Fabricate\Server\ServerRepository;
 use Mariner\Http\Request;
 use Mariner\Http\Response;
-use SuperconductorMCP\SSE\Http\EventStream;
+use SuperconductorMCP\SSE\Http\Middleware\Authenticate;
 use SuperconductorMCP\SSE\Http\Middleware\ResolveSession;
 use SuperconductorMCP\SSE\Sessions\HttpSessions;
 use Symfony\Component\HttpFoundation\Response as SymfonyResponse;
@@ -58,11 +58,14 @@ class MessagesController
             }
 
             $session = $this->sessions->open($server);
+            $session->owner = $request->attributes->get(Authenticate::USER)?->getAuthIdentifier();
         } elseif (LineDecoder::isBatch($body) && ! $session->bag()->takesBatches()) {
             return self::json((new InvalidRequest(null, "Batches are not supported in protocol {$session->bag()->protocol_version}."))->toJson(), 400);
         }
 
-        $stream = new EventStream();
+        $bag = $session->bag();
+        // a POST stream is done once every request it carried is answered or cancelled
+        $stream = $session->openStream(fn (): bool => array_intersect_key($ids, $bag->in_flight) === []);
         $session->bindServer();
 
         foreach ($messages as $message) {
@@ -78,23 +81,20 @@ class MessagesController
         }
 
         if ($ids === []) {
+            unset($session->event_streams[$stream->id]);
             $errors = $stream->pending();
 
             return $errors === [] ? new Response('', 202) : self::json(count($errors) === 1 ? $errors[0] : '['.implode(',', $errors).']', 400);
         }
 
-        $bag = $session->bag();
         $headers = ['Content-Type' => 'text/event-stream', 'Cache-Control' => 'no-cache'];
 
         if ($opened) {
             $headers['Mcp-Session-Id'] = $session->id;
         }
 
-        return new StreamedResponse(function () use ($stream, $ids, $bag) {
-            $stream->pipeUntil($this->event_loop, function () use ($ids, $bag) {
-                return array_intersect_key($ids, $bag->in_flight) === [];
-            });
-        }, 200, $headers);
+        // a client that loses this stream resumes it with a GET and Last-Event-ID; the requests run on meanwhile
+        return new StreamedResponse(fn () => $session->follow($stream, $this->event_loop), 200, $headers);
     }
 
     private static function json(string $json, int $status): Response

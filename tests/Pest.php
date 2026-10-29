@@ -24,6 +24,14 @@ uses()
     })
     ->in('Http');
 
+// The authorization server's browser flow, through the HTTP kernel; each test migrates an in-memory database.
+uses(SuperconductorMCP\SSE\Tests\Fixtures\OAuthCase::class)
+    ->beforeEach(function () {
+        config(['session.driver' => 'array', 'cache.default' => 'array']);
+        mcpDatabase($this);
+    })
+    ->in('OAuth');
+
 /** Boot the fixture app again with $sse as its config/sse.php: for config that is read while the app boots. */
 function bootWithSse($test, array $sse): void
 {
@@ -137,9 +145,9 @@ function mcp($test, HttpServer $server, string $method, array $headers = [], ?ar
 }
 
 /** Initialize a session on the named server; its id and the answer. */
-function mcpInitialize($test, HttpServer $server, string $name = 'fixture', array $capabilities = [], string $version = '2025-06-18'): array
+function mcpInitialize($test, HttpServer $server, string $name = 'fixture', array $capabilities = [], string $version = '2025-06-18', array $headers = []): array
 {
-    $answer = mcp($test, $server, 'POST', [], [
+    $answer = mcp($test, $server, 'POST', $headers, [
         'jsonrpc' => '2.0', 'id' => 0, 'method' => 'initialize',
         'params' => ['protocolVersion' => $version, 'capabilities' => (object) $capabilities, 'clientInfo' => ['name' => 'test', 'version' => '1']],
     ], $name);
@@ -195,12 +203,41 @@ function mcpAnswer(string $raw): array
         $body = $decoded;
     }
 
-    preg_match_all('/^data: (.*)$/m', $body, $data);
+    // a priming event (2025-11-25) has an id and empty data: no message
+    preg_match_all('/^data: (.+)$/m', $body, $data);
+    preg_match_all('/^id: (.*)$/m', $body, $ids);
 
     return [
         'status' => (int) ($status[1] ?? 0),
         'headers' => $headers,
         'body' => $body,
         'events' => array_map(fn (string $json) => json_decode($json, true), $data[1]),
+        'ids' => $ids[1],
     ];
+}
+
+/**
+ * An in-memory database with the tables an application gets by publishing serve's users migration and this
+ * package's migrations (`vendor:publish`), then running `migrate`. The published copies are removed afterwards.
+ */
+function mcpDatabase($test): void
+{
+    config([
+        'database.default' => 'sqlite',
+        'database.connections.sqlite.database' => ':memory:',
+        'auth.providers.users' => ['driver' => 'instrument', 'model' => Mariner\Auth\User::class],
+    ]);
+
+    $kernel = app(Voyager\Contracts\Console\Kernel::class);
+    $migrations = database_path('migrations');
+
+    try {
+        foreach (['mariner-migrations', 'sse-migrations'] as $tag) {
+            expect($kernel->handle(new Symfony\Component\Console\Input\ArrayInput(['command' => 'vendor:publish', '--tag' => $tag]), new Symfony\Component\Console\Output\NullOutput))->toBe(0);
+        }
+
+        expect($kernel->handle(new Symfony\Component\Console\Input\ArrayInput(['command' => 'migrate', '--force' => true]), $output = new Symfony\Component\Console\Output\BufferedOutput))->toBe(0, $output->fetch());
+    } finally {
+        (new Voyager\Filesystem\Filesystem)->deleteDirectory(dirname($migrations));
+    }
 }

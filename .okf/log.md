@@ -1,6 +1,16 @@
 # Log
 
+## 2026-10-29 (2025-11-25)
+
+* **Authorization server**: `sse.authorization.server.enabled` runs a built-in OAuth 2.1 authorization server: RFC 8414 metadata, `authorize` with login and consent pages (session, CSRF, unframeable), PKCE S256 codes used once, `token` with rotated refresh tokens and grant revocation on reuse, RFC 7591 registration, client metadata documents fetched with SSRF guards, RFC 7009 revocation, RFC 9207 `iss`, tokens bound to one endpoint. Proven with the TypeScript SDK 1.32.2's own OAuth client against the sandbox server ([authorization](architecture/authorization.md), [config](reference/config.md)).
+* **Migrations published, not loaded**: the package's migrations are undated; `vendor:publish --tag=sse-migrations` copies them into the app dated, reusing existing copies; no package path is handed to the migrator.
+* **Fix**: the `mcp` guard is defined at boot; defined at register, before serve's provider merged `config/auth.php`, it left the app with no `web` guard.
+* **Authorization**: with `sse.authorization.guard` set the endpoint is an OAuth protected resource. `Authenticate` (`mcp.auth`) answers `401` with `WWW-Authenticate` naming the RFC 9728 metadata, `403 insufficient_scope` for a missing scope; `GET /.well-known/oauth-protected-resource/mcp/{server}` serves the metadata; sessions belong to the user who opened them. The `mcp` guard checks `mcp_access_tokens` (`AccessToken::issue()`), bound to the endpoint's canonical URI. Requires `venusian-mariner/auth` and `venusian-voyager/database`. Proven with the TypeScript SDK 1.32.2 carrying a token ([authorization](architecture/authorization.md), [config](reference/config.md)).
+* **Resumable streams (SEP-1699)**: every event carries `id: <stream>:<seq>`; a 2025-11-25 stream opens with an id and empty data; `GET` with `Last-Event-ID` resumes the stream it names, a GET's or a POST's, replaying only that stream's missed events. A POST whose connection drops keeps running and its answer waits on its stream. `session.replay_events` (100) bounds what a stream keeps after writing it ([transport](architecture/transport.md), [config](reference/config.md)).
+
 ## 2026-10-28 (0.11.0)
+
+* **venusian/serve 0.11.1**: `require-dev` takes `^0.11.1` and `conflict` refuses `<0.11.1`, without a runtime requirement on serve. 0.11.1 runs ten requests at once on every OS (elicitation's answer arrives as a second POST while the first waits), cancels a request whose client hangs up (a GET stream stops counting against its session), and has the `HttpServer` contract the tests serve through.
 
 * **Streamable HTTP transport**: `POST`, `GET` and `DELETE /mcp/{server}` on the application's router, three controllers (messages, stream, session), three guards (host and origin, protocol version, session), sessions in the serving process's memory ([transport](architecture/transport.md), [sessions](server/sessions.md)). Proven end to end against the official TypeScript SDK client (initialize, a tool call, elicitation, progress, a log through the GET stream, DELETE).
 * **Config**: `config/sse.php` names the path, the controller per method, the middleware, the allowed hosts and the session timings; the provider registers controllers and middleware in the container so an application swaps one through config alone ([config](reference/config.md)).
